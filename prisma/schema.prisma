@@ -1,0 +1,158 @@
+// Humanize — Prisma schema
+// Postgres in production (Vercel Postgres / Neon / Supabase). Works with
+// SQLite locally by swapping the datasource provider for quick prototyping.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String       @id @default(cuid())
+  name          String?
+  email         String       @unique
+  passwordHash  String?
+  createdAt     DateTime     @default(now())
+  plan          String       @default("free") // free | paid — centralize pricing config in lib/plans.ts
+  assignments   Assignment[]
+  usageEvents   UsageEvent[]
+}
+
+model Assignment {
+  id            String       @id @default(cuid())
+  userId        String
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  instructions  String?
+  status        String       @default("draft") // draft | analyzed | in_review | completed
+  sourceType    String       // paste | pdf | docx | pptx | txt | image | zip
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  sections      AssignmentSection[]
+  files         DocumentFile[]
+  analysis      AnalysisResult?
+  versions      AssignmentVersion[]
+  aiRequests    AiRequest[]
+
+  @@index([userId])
+}
+
+model DocumentFile {
+  id            String     @id @default(cuid())
+  assignmentId  String
+  assignment    Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  fileName      String
+  fileType      String
+  fileSize      Int
+  storagePath   String?    // set when persisted to blob storage; null while ephemeral
+  createdAt     DateTime   @default(now())
+}
+
+model AssignmentSection {
+  id            String     @id @default(cuid())
+  assignmentId  String
+  assignment    Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  order         Int
+  heading       String?
+  originalText  String
+  currentText   String
+  needsInput    Boolean    @default(false)
+  signals       Json?      // { genericLanguage, repetition, specificity, reasoning, evidence }
+  issues        Json?      // string[]
+
+  questions         Question[]
+  answers           StudentAnswer[]
+  reconstructions   ReconstructedSection[]
+
+  @@index([assignmentId])
+}
+
+model AnalysisResult {
+  id            String     @id @default(cuid())
+  assignmentId  String     @unique
+  assignment    Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  overallSignal Int
+  confidence    String
+  promptVersion String
+  provider      String
+  model         String
+  createdAt     DateTime   @default(now())
+}
+
+model Question {
+  id            String            @id @default(cuid())
+  sectionId     String
+  section       AssignmentSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  type          String
+  question      String
+  reason        String?
+  createdAt     DateTime          @default(now())
+  answers       StudentAnswer[]
+}
+
+model StudentAnswer {
+  id            String            @id @default(cuid())
+  assignmentId  String
+  sectionId     String
+  section       AssignmentSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  questionId    String
+  question      Question          @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answer        String
+  type          String
+  createdAt     DateTime          @default(now())
+}
+
+model ReconstructedSection {
+  id                     String            @id @default(cuid())
+  sectionId              String
+  section                AssignmentSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  original               String
+  personalized           String
+  studentInputsUsed      Json
+  changes                Json
+  potentialUnsupportedClaims Json
+  status                 String            @default("proposed") // proposed | accepted | edited | rejected
+  createdAt              DateTime          @default(now())
+}
+
+model AssignmentVersion {
+  id            String     @id @default(cuid())
+  assignmentId  String
+  assignment    Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  label         String     // original | analyzed | personalized | edited | final
+  content       String
+  createdAt     DateTime   @default(now())
+
+  @@index([assignmentId])
+}
+
+model AiRequest {
+  id            String     @id @default(cuid())
+  assignmentId  String?
+  assignment    Assignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  operation     String     // analyzeAssignment | analyzeSection | generateQuestions | reconstructSection | reviewAssignment | extractContent | summarize
+  provider      String
+  model         String
+  promptVersion String?
+  success       Boolean
+  fallbackFrom  String?
+  latencyMs     Int
+  estCostUsd    Float?
+  createdAt     DateTime   @default(now())
+}
+
+model UsageEvent {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind          String   // assignment_created | words_processed | ai_request | search | file_processed
+  amount        Int      @default(1)
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+}
